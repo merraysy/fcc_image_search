@@ -1,33 +1,123 @@
 'use strict';
 
+var dotenv = require('dotenv');
 var express = require('express');
-var routes = require('./app/routes/index.js');
 var mongoose = require('mongoose');
-var passport = require('passport');
-var session = require('express-session');
+var Schema = mongoose.Schema;
+var BingSearch = require('bing.search');
+
+dotenv.config();
+var port = process.env.PORT || 8080;
+var dbUrl = process.env.MONGO_URI;
+var appUrl = process.env.APP_URL;
 
 var app = express();
-require('dotenv').load();
-require('./app/config/passport')(passport);
+var bingSearch = new BingSearch(process.env.BING_KEY);
 
-mongoose.connect(process.env.MONGO_URI);
+mongoose.connect(dbUrl);
 
-app.use('/controllers', express.static(process.cwd() + '/app/controllers'));
-app.use('/public', express.static(process.cwd() + '/public'));
-app.use('/common', express.static(process.cwd() + '/app/common'));
+var keyword = new Schema({
 
-app.use(session({
-	secret: 'secretClementine',
-	resave: false,
-	saveUninitialized: true
-}));
+	keywords: String,
+	time: String
+	
+});
 
-app.use(passport.initialize());
-app.use(passport.session());
+var Keyword = mongoose.model('keyword', keyword);
 
-routes(app, passport);
+app.get('/', function(req, res) {
+   
+   res.end('Perform an images search like this "' + appUrl + '/search/images/{keyword}?offset={Number}"\nCheck the latest search keywords here "' + appUrl + '/latest/keywords"');
+    
+});
 
-var port = process.env.PORT || 8080;
+app.param('keyword', function(req, res, next, keyword) {
+
+	req.keyword = keyword;
+	
+	next();
+	
+});
+
+app.get('/search/images/:keyword', function(req, res) {
+	
+	if (req.query.offset) {
+		var offset = Number.isInteger(parseInt(req.query.offset)) ? req.query.offset : NaN;
+		
+		if (isNaN(offset)) {
+			res.send({
+				offset: NaN,
+				errorMsg: 'offset option needs to be a Number'
+			});
+			return;
+		}
+	}
+	
+	var newKeyword = new Keyword();
+	
+	newKeyword.keywords = req.keyword;
+	newKeyword.time = new Date();
+	
+	newKeyword.save(function(err, keyword) {
+	
+		if (err) return console.log(err.message);
+		
+	});
+	
+	bingSearch.images(req.keyword, 
+	{
+		skip: offset
+	},
+	function(err, results) {
+		
+		if (err) return console.log(err);
+		
+		var arr = [];
+		
+		results.forEach(function(result) {
+			
+			var obj = {};
+			
+			obj.title = result.title;
+			obj.image = result.url;
+			obj.thumbnail = result.thumbnail.url;
+			obj.sourceUrl = result.sourceUrl;
+			
+			arr.push(obj);
+			
+		});
+		
+		res.json(arr);
+		
+	});
+	
+});
+
+app.get('/latest/keywords', function(req, res) {
+	
+	Keyword.find(null, null, { limit: 10, sort: { time: -1 } }, function(err, keywords) {
+		
+		if (err) return console.log(err.message);
+		
+		var result = [];
+		
+		keywords.forEach(function(keyword) {
+		
+			var obj = {};
+			
+			obj.keywords = keyword.keywords;
+			obj.time = keyword.time;
+			
+			result.push(obj);
+			
+		});
+		
+		res.json(result);
+		
+	});
+	
+});
+
 app.listen(port,  function () {
 	console.log('Node.js listening on port ' + port + '...');
 });
